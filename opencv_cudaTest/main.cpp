@@ -11,6 +11,9 @@
 
 int main()
 {
+    std::cout << cv::getBuildInformation() << std::endl;
+    cv::cuda::printShortCudaDeviceInfo(cv::cuda::getDevice());
+
     cv::Mat src = cv::imread("room_living.png", cv::IMREAD_UNCHANGED);
     cv::Mat canny_dst;
     cv::Mat sobelX_dst;
