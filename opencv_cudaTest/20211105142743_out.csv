@@ -1,7 +1,0 @@
-ITR,100
-W:500,H:500
-canny(GPU),1.20242
-canny(CPU),1.78252
-sobel(GPU),5.23557
-sobel(CPU),6.42537
-stream(GPU),4.45036

@@ -14,7 +14,7 @@
 #include <sstream>
 #include <iomanip>
 
-//#include "cuda_runtime.h"
+#include <cuda_runtime.h>
 #include "myTimer.h"
 #include "MyUtils.h"
 
@@ -23,19 +23,21 @@
 
 int main()
 {
-    const std::string outdataName = "_out.csv"; //出力するcsvファイルの名前
-    const std::string inputImgName = "imgs/bunny.png"; //入力する画像のパス
-    const int ITR = 1000; //繰り返し実行回数
+    const std::string outdataName = "_out648.csv"; //出力するcsvファイルの名前
+    const std::string inputImgName = "imgs/1.png"; //入力する画像のパス
+    const std::string inputImgName2 = "imgs/2.png"; //入力する画像のパス
+    const int ITR = 6000; //繰り返し実行回数
     const int ROI_X = 0; //ROIの左上座標
     const int ROI_Y = 0;
-    const int ROI_W = 300; //ROIのサイズ
-    const int ROI_H = 300;
+    const int ROI_W = 648; //ROIのサイズ
+    const int ROI_H = 488;
     MyTimer timer[6];
 
     std::ofstream out(myutils::getDatetimeStr()+outdataName);
 
 
-    cv::Mat src = cv::imread(inputImgName,0);
+    cv::Mat src = cv::imread(inputImgName, 0);
+    cv::Mat src2 = cv::imread(inputImgName2,0);
     cv::Mat canny_dst;
     cv::Mat sobelX_dst;
     cv::Mat sobelY_dst;
@@ -55,7 +57,7 @@ int main()
     cv::Ptr<cv::cuda::Filter> sobelY = cv::cuda::createSobelFilter(CV_32FC1, CV_32FC1, 0, 1, 3);
 
     //std::cout << cv::getBuildInformation() << std::endl;
-    //cv::cuda::printShortCudaDeviceInfo(cv::cuda::getDevice());
+    cv::cuda::printShortCudaDeviceInfo(cv::cuda::getDevice());
 
     std::cout << "canny(GPU)計測中..." << std::endl;
     timer[0].start();
@@ -148,11 +150,12 @@ int main()
         //sobelY_gray = sobelX_gray.clone();
         sobelX->apply(sobelX_ROI, sobelX_ROI, stream2[0]);
         sobelY->apply(sobelY_ROI, sobelY_ROI, stream2[1]);
+
+        gaussFilter->apply(canny_ROI, canny_ROI, stream2[2]);
+        canny->detect(canny_ROI, canny_ROI, stream2[2]);
+
         sobelX_gray.download(sobelX_dst, stream2[0]); // ホストメモリに転送する
         sobelY_gray.download(sobelY_dst, stream2[1]); // ホストメモリに転送する
-        
-        gaussFilter->apply(canny_ROI, canny_ROI,stream2[2]);
-        canny->detect(canny_ROI, canny_ROI,stream2[2]);
         canny_src.download(canny_dst,stream2[2]); // ホストメモリに転送する
     }
     timer[4].stop();
@@ -177,6 +180,79 @@ int main()
     }
     timer5.stop();
 */
+    cv::cuda::HostMem srcMem;
+    cv::cuda::HostMem src2Mem;
+    cv::cuda::HostMem inputMem;
+    cv::cuda::HostMem outputMemx;
+    cv::cuda::HostMem outputMemy;
+    cv::Mat outputTest;
+    srcMem = cv::cuda::HostMem(src.size(), CV_8UC1, cv::cuda::HostMem::AllocType::PAGE_LOCKED);
+    src2Mem = cv::cuda::HostMem(src.size(), CV_8UC1, cv::cuda::HostMem::AllocType::PAGE_LOCKED);
+    outputMemx = cv::cuda::HostMem(src.size(), CV_32FC1, cv::cuda::HostMem::AllocType::PAGE_LOCKED);
+    outputMemy = cv::cuda::HostMem(src.size(), CV_32FC1, cv::cuda::HostMem::AllocType::PAGE_LOCKED);
+    inputMem = cv::cuda::HostMem(src.size(), CV_32FC1, cv::cuda::HostMem::AllocType::PAGE_LOCKED);
+    cv::cuda::GpuMat sobelTmp,sx,sy;
+    cv::Mat srcMemMat;
+    cv::Mat src2MemMat;
+    srcMemMat = srcMem.createMatHeader();
+    src2MemMat = src2Mem.createMatHeader();
+    cv::Mat outputMemMat;
+    outputMemMat = outputMemx.createMatHeader();
+    src.copyTo(srcMemMat);
+    src2.copyTo(src2MemMat);
+
+    cv::cuda::GpuMat cannyTmp;
+
+
+    std::cout << "sobel(GPU)2計測中..." << std::endl;
+    cv::cuda::Stream streams[3];
+    MyTimer atimer;
+    atimer.start();
+    for (int i = 0; i < ITR; ++i) {
+        if (i % 2 == 0) {
+            sobelTmp.upload(srcMem, streams[0]);
+        }
+        else {
+            sobelTmp.upload(src2Mem, streams[0]);
+        }
+        stream[0].waitForCompletion();
+        cannyTmp = sobelTmp.clone();
+        sobelTmp.convertTo(sx, CV_32FC1, 1.0 / 255.0, streams[0]);
+        sobelTmp.convertTo(sy, CV_32FC1, 1.0 / 255.0, streams[1]);
+        cv::cuda::GpuMat sobelX_ROI = sx(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
+        cv::cuda::GpuMat sobelY_ROI = sy(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
+        //sobelY_gray = sobelX_gray.clone();
+        sobelX->apply(sobelX_ROI, sobelX_ROI, streams[0]);
+        sobelY->apply(sobelY_ROI, sobelY_ROI, streams[1]);
+        sx.download(outputMemx, streams[0]); // ホストメモリに転送する
+        sy.download(outputMemy, streams[1]); // ホストメモリに転送する
+     
+        if (i % 2 == 0) {
+            cannyTmp.upload(srcMem, streams[2]);
+        }
+        else {
+            cannyTmp.upload(src2Mem, streams[2]);
+        }
+        cv::cuda::GpuMat canny_ROI = cannyTmp(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
+        gaussFilter->apply(canny_ROI, canny_ROI,streams[2]);
+        canny->detect(canny_ROI, canny_ROI,streams[2]);
+        cannyTmp.download(canny_dst,streams[2]); // ホストメモリに転送する
+        stream->waitForCompletion();
+    }
+    atimer.stop();
+
+    //cv::cuda::GpuMat cannyTmp;
+    //std::cout << "canny(GPU)計測中..." << std::endl;
+    //MyTimer btimer;
+    //btimer.start();
+    //for (int i = 0; i < ITR; ++i) {
+    //    cannyTmp.upload(srcMem, streams[0]);
+    //    cv::cuda::GpuMat canny_ROI = cannyTmp(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
+    //    gaussFilter->apply(canny_ROI, canny_ROI);
+    //    canny->detect(canny_ROI, canny_ROI);
+    //    cannyTmp.download(canny_dst); // ホストメモリに転送する
+    //}
+   // btimer.stop();
 
     out << "ITR," << ITR << std::endl;
     out << "ROI_W:" << ROI_W << "," << "ROI_H:" << ROI_H << std::endl;
@@ -185,13 +261,17 @@ int main()
     out << "sobel(GPU)," << timer[2].MSec()/ITR << std::endl;
     out << "sobel(CPU)," << timer[3].MSec() / ITR << std::endl;
     out << "stream(GPU)," << timer[4].MSec() / ITR << std::endl;
+    out << "sobel(GPU)2," << atimer.MSec() / ITR << std::endl;
+   // out << "canny(GPU)2," << btimer.MSec() / ITR << std::endl;
 
 
+    cv::Mat testMat;
+    outputMemMat.convertTo(testMat, CV_8UC1, 255);
     //cv::namedWindow("normal", cv::WINDOW_AUTOSIZE);
-    //cv::imshow("normal", canny_dst);
+    cv::imshow("normal", testMat);
 
-    //cv::waitKey(0);
-    //cv::destroyAllWindows();
+    cv::waitKey(0);
+    cv::destroyAllWindows();
     //cudaFree(managed_canny_src);
 
     std::cout << "計測終了" << std::endl;

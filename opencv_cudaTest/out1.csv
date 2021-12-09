@@ -1,5 +1,0 @@
-ITR,10000
-canny(GPU),0.642521
-canny(CPU),0.39905
-sobel(GPU),0.983193
-sobel(CPU),1.66975
