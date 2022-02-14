@@ -14,6 +14,9 @@
 #include <sstream>
 #include <iomanip>
 
+#include<stdio.h>
+#include <omp.h>
+
 #include <cuda_runtime.h>
 #include "myTimer.h"
 #include "MyUtils.h"
@@ -33,11 +36,11 @@ int main()
     const int ROI_H = 488;
     MyTimer timer[6];
 
-    std::ofstream out(myutils::getDatetimeStr()+outdataName);
+    std::ofstream out(myutils::getDatetimeStr() + outdataName);
 
 
     cv::Mat src = cv::imread(inputImgName, 0);
-    cv::Mat src2 = cv::imread(inputImgName2,0);
+    cv::Mat src2 = cv::imread(inputImgName2, 0);
     cv::Mat canny_dst;
     cv::Mat sobelX_dst;
     cv::Mat sobelY_dst;
@@ -49,7 +52,7 @@ int main()
     }
 
     //CannyEdgeDetectorの定義
-    cv::Ptr<cv::cuda::CannyEdgeDetector> canny = cv::cuda::createCannyEdgeDetector(50, 100,3,true);
+    cv::Ptr<cv::cuda::CannyEdgeDetector> canny = cv::cuda::createCannyEdgeDetector(50, 100, 3, true);
     cv::Ptr<cv::cuda::Filter> gaussFilter = cv::cuda::createGaussianFilter(CV_8UC1, CV_8UC1, cv::Size(5, 5), 0, 0, cv::BORDER_REPLICATE);
 
     //SobelFilterの定義、cudaではFilterクラスで管理されている
@@ -61,7 +64,7 @@ int main()
 
     std::cout << "canny(GPU)計測中..." << std::endl;
     timer[0].start();
-    for (int i = 0;i < ITR;++i) {
+    for (int i = 0; i < ITR; ++i) {
         cv::cuda::GpuMat canny_src(src);
         cv::cuda::GpuMat canny_ROI = canny_src(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
         gaussFilter->apply(canny_ROI, canny_ROI);
@@ -72,32 +75,57 @@ int main()
 
     std::cout << "canny(CPU)計測中..." << std::endl;
     timer[1].start();
-    for (int i = 0;i < ITR;++i) {
-        cv::Mat canny_src2 = src.clone();
-        cv::Mat canny_ROI2 = canny_src2(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
-        cv::GaussianBlur(canny_ROI2, canny_ROI2, cv::Size(5, 5), 0, 0, cv::BORDER_REPLICATE);
-        cv::Canny(canny_ROI2, canny_ROI2, 50, 100, 3, true);
+    for (int i = 0; i < ITR; ++i) {
+        cv::Mat canny_src = src.clone();
+        cv::Mat canny_ROI = canny_src(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
+        cv::GaussianBlur(canny_ROI, canny_ROI, cv::Size(5, 5), 0, 0, cv::BORDER_REPLICATE);
+        cv::Canny(canny_ROI, canny_ROI, 50, 100, 3, true);
     }
     timer[1].stop();
 
     std::cout << "sobel(GPU)計測中..." << std::endl;
     cv::cuda::Stream stream[2];
     timer[2].start();
-    for (int i = 0;i < ITR;++i) {
+    for (int i = 0; i < ITR; ++i) {
         cv::cuda::GpuMat sobel_src(src), sobelX_gray, sobelY_gray;
 
         sobel_src.convertTo(sobelX_gray, CV_32FC1, 1.0 / 255.0, stream[0]);
-        sobel_src.convertTo(sobelY_gray, CV_32FC1,1.0/255.0,stream[1]);
+        sobel_src.convertTo(sobelY_gray, CV_32FC1, 1.0 / 255.0, stream[1]);
         cv::cuda::GpuMat sobelX_ROI = sobelX_gray(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
         cv::cuda::GpuMat sobelY_ROI = sobelY_gray(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
         //sobelY_gray = sobelX_gray.clone();
-        sobelX->apply(sobelX_ROI, sobelX_ROI,stream[0]);
-        sobelY->apply(sobelY_ROI, sobelY_ROI,stream[1]);
-        sobelX_gray.download(sobelX_dst,stream[0]); // ホストメモリに転送する
-        sobelY_gray.download(sobelY_dst,stream[1]); // ホストメモリに転送する
+        sobelX->apply(sobelX_ROI, sobelX_ROI, stream[0]);
+        sobelY->apply(sobelY_ROI, sobelY_ROI, stream[1]);
+        sobelX_gray.download(sobelX_dst, stream[0]); // ホストメモリに転送する
+        sobelY_gray.download(sobelY_dst, stream[1]); // ホストメモリに転送する
     }
     timer[2].stop();
 
+#pragma omp parallel sections num_threads(2)
+    {
+#pragma omp section
+        {
+            cv::Mat canny_src = src.clone();
+            cv::Mat canny_ROI = canny_src(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
+            cv::GaussianBlur(canny_ROI, canny_ROI, cv::Size(5, 5), 0, 0, cv::BORDER_REPLICATE);
+            cv::Canny(canny_ROI, canny_ROI, 50, 100, 3, true);
+            ;
+        }
+#pragma omp section
+        {
+            cv::Mat sobelX_gray2 = src.clone();
+            cv::Mat sobelY_gray2 = src.clone();
+            cv::Mat sobelX_gray2_converted;
+            cv::Mat sobelY_gray2_converted;
+            sobelX_gray2.convertTo(sobelX_gray2_converted, CV_32FC1, 1.0 / 255.0);
+            sobelY_gray2_converted = sobelX_gray2_converted.clone();
+            cv::Mat sobelX_ROI2 = sobelX_gray2_converted(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
+            cv::Mat sobelY_ROI2 = sobelY_gray2_converted(cv::Rect(ROI_X, ROI_Y, ROI_W, ROI_H));
+            cv::Sobel(sobelX_ROI2, sobelX_ROI2, CV_32FC1, 1, 0, 3);
+            cv::Sobel(sobelY_ROI2, sobelY_ROI2, CV_32FC1, 0, 1, 3);
+            ;
+        }
+    }
     /*
     * Streamを使わない実装例
     std::cout << "sobel(GPU)計測中..." << std::endl;
@@ -258,10 +286,10 @@ int main()
     out << "ROI_W:" << ROI_W << "," << "ROI_H:" << ROI_H << std::endl;
     out << "canny(GPU)," << timer[0].MSec() / ITR << std::endl;
     out << "canny(CPU)," << timer[1].MSec() / ITR << std::endl;
-    out << "sobel(GPU)," << timer[2].MSec()/ITR << std::endl;
+    out << "sobel(GPU)," << timer[2].MSec() << std::endl;
     out << "sobel(CPU)," << timer[3].MSec() / ITR << std::endl;
-    out << "stream(GPU)," << timer[4].MSec() / ITR << std::endl;
-    out << "sobel(GPU)2," << atimer.MSec() / ITR << std::endl;
+    out << "stream(GPU)," << timer[4].MSec() << std::endl;
+    out << "sobel(GPU)2," << atimer.MSec()  << std::endl;
    // out << "canny(GPU)2," << btimer.MSec() / ITR << std::endl;
 
 

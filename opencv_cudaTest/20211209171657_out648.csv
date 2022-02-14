@@ -1,8 +1,0 @@
-ITR,6000
-ROI_W:648,ROI_H:488
-canny(GPU),0.416124
-canny(CPU),0.189573
-sobel(GPU),0.858882
-sobel(CPU),0.761738
-stream(GPU),1.10619
-sobel(GPU)2,0.173369
